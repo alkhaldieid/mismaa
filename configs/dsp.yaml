@@ -1,0 +1,123 @@
+# Mismaa DSP configuration — single source of truth for every preprocessing and
+# feature-extraction parameter. Nothing in dsp/ hard-codes a numeric constant;
+# it all resolves from here via dsp.config.load_config().
+#
+# Two acquisition domains are described:
+#   * audio      -> MIMII acoustic recordings (8-mic array, 16 kHz, 10 s clips)
+#   * cwru       -> CWRU bearing vibration (.mat, drive-end accelerometer, 12 kHz)
+# The transform blocks (framing/stft/mel/mfcc/vibration) are domain-agnostic and
+# are pointed at whichever signal you loaded.
+
+audio:
+  sample_rate: 16000        # MIMII native rate; loader asserts against this.
+  default_channel: 0        # eight-mic circular array; ch0 unless overridden.
+  mono_mixdown: false       # true -> average all mics (loses spatial info,
+                            # improves SNR for a diffuse source).
+
+cwru:
+  sample_rate: 12000        # 12 kHz drive-end dataset (there is also a 48 kHz set).
+  channel: DE               # DE | FE | BA -> selects the *_DE_time / *_FE_time / *_BA_time key.
+  # Documented CWRU test-bench speeds by motor load. The .mat files usually store
+  # the measured RPM; when they do, the loader prefers it. These are the fallback
+  # for records (some Normal_*.mat) that omit the RPM field.
+  nominal_rpm:
+    0: 1797
+    1: 1772
+    2: 1750
+    3: 1730
+
+preprocess:
+  # DC / mean removal. An accelerometer or AC-coupled mic still leaves a small
+  # DC term that biases RMS/kurtosis and leaks into the lowest STFT bins.
+  dc_removal:
+    enabled: true
+    method: mean            # mean = subtract the sample mean (zero-phase, exact).
+                            # highpass = 2nd-order Butterworth HPF (removes slow drift
+                            # too, at the cost of a low-frequency transient).
+    highpass_hz: 5.0        # corner used only when method == highpass.
+
+  # Butterworth band-pass. Maximally-flat passband (no ripple) in exchange for a
+  # gentle roll-off; order trades transition sharpness against ringing/latency.
+  # Disabled by default so raw spectra are inspected before any band is removed.
+  bandpass:
+    enabled: false
+    order: 4                # per-direction order; zero_phase doubles the effective order.
+    low_hz: 20.0
+    high_hz: 7000.0         # keep < Nyquist (sr/2); loader/filters validate this.
+    zero_phase: true        # filtfilt: no phase distortion, but non-causal (offline only).
+
+  # Pre-emphasis: first-order high-pass y[n] = x[n] - a*x[n-1]. Flattens the
+  # natural spectral tilt (roughly +6 dB/oct boost), lifting weak high-frequency
+  # detail before framing. Classic speech front-end; useful for MIMII fan/pump tones.
+  pre_emphasis:
+    enabled: false
+    coefficient: 0.97       # a in [0,1); higher = stronger HF boost.
+
+  # Single-channel spectral subtraction (Boll/Berouti). Assumes locally stationary
+  # additive noise estimated from the first `noise_frames` frames. Over-subtraction
+  # suppresses more noise but creates "musical noise"; the spectral floor trades
+  # residual noise against those artefacts.
+  spectral_subtraction:
+    enabled: false
+    n_fft: 1024
+    hop_length: 256
+    window: hann
+    noise_frames: 6         # leading frames assumed to be noise-only.
+    over_subtraction: 2.0   # alpha: multiplies the noise estimate before subtracting.
+    spectral_floor: 0.02    # beta: residual noise floor as a fraction of the noise estimate.
+
+# Framing / windowing. The window length sets the time–frequency trade:
+# resolution df = sample_rate / frame_length, so a longer frame buys finer
+# frequency resolution but blurs time (worse for transients/impacts). The hop
+# sets overlap = 1 - hop/frame_length; 75% overlap (hop = frame/4) is the usual
+# COLA-friendly choice that keeps the analysis smooth without excess redundancy.
+framing:
+  frame_length: 1024        # win_length in samples.
+  hop_length: 256           # 75% overlap.
+  window: hann              # hann | hamming | blackman | boxcar.
+  center: true              # pad so frame t is centered at t*hop (librosa convention).
+  pad_mode: reflect         # edge padding used when center = true.
+
+stft:
+  n_fft: 1024               # >= frame_length. If larger, the windowed frame is
+                            # zero-padded: this interpolates the spectrum (denser
+                            # bins) but does NOT add real resolution.
+
+# Log-Mel. The mel scale is roughly linear below 1 kHz and logarithmic above,
+# matching auditory frequency warping; it compresses many high-frequency FFT bins
+# into few perceptually-spaced bands. More mels = finer spectral detail but more
+# correlated, sparser-per-band features.
+mel:
+  n_mels: 64                # 64 or 128 are the common choices.
+  fmin: 0.0
+  fmax: null                # null -> sample_rate / 2.
+  norm: slaney              # slaney = equal-area triangles; null = unit-peak triangles.
+  mel_scale: slaney         # slaney | htk (two standard mel formulae).
+
+# MFCC = DCT-II of the log-Mel spectrum. The DCT decorrelates the mel bands and
+# packs energy into the low cepstral coefficients; keeping n_mfcc of them discards
+# fine spectral ripple (pitch/harmonics) and keeps the spectral envelope.
+mfcc:
+  n_mfcc: 20
+  lifter: 0                 # sinusoidal liftering; 0 disables.
+  deltas: true              # append 1st (and 2nd) temporal derivatives.
+  delta_width: 9            # regression window (odd); wider = smoother, more lag.
+
+# Vibration-specific analysis.
+vibration:
+  # Envelope (Hilbert) analysis demodulates a high-frequency structural resonance
+  # that is amplitude-modulated by bearing impacts. Band-passing around the
+  # resonance before the Hilbert transform is what makes the fault-repetition
+  # frequencies (BPFO/BPFI/BSF) show up cleanly in the envelope spectrum.
+  envelope:
+    enabled: true
+    bandpass:
+      enabled: true
+      order: 4
+      low_hz: 500.0
+      high_hz: 5000.0
+      zero_phase: true
+  # Time-domain health indicators, computed per frame so they can be tracked over time.
+  stats:
+    frame_length: 2048
+    hop_length: 512

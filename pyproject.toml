@@ -1,0 +1,23 @@
+[project]
+name = "mismaa"
+version = "0.1.0"
+description = "Mismaa: acoustic and vibration condition-monitoring pipeline"
+requires-python = ">=3.11"
+
+# Tooling config lives here as the single source of truth so that `ruff` and
+# `pytest` behave identically on the CLI, in the Makefile, and in CI.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+# DSP code conventionally uses short uppercase names for spectrograms / signal
+# matrices (S, X, De). Those trip pep8-naming, which we do not enable anyway.
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `import dsp` resolves without an editable
+# install. Keeps `make test` a one-liner.
+pythonpath = ["."]
+testpaths = ["tests"]
