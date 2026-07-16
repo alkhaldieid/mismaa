@@ -38,6 +38,18 @@ from models.evaluate import (
     reconstruction_error_per_window,
 )
 
+# Static description of the pipeline, prepended to results/phase2.md so the table
+# is self-documenting and reproducible from the config alone.
+_METHOD_NOTE = (
+    "**Method:** DCASE-2020-Task-2-style baseline. Each 10 s MIMII clip (single mic, "
+    "channel 0) becomes a 64-band log-Mel spectrogram (`configs/dsp.yaml`), sliced into "
+    "5-frame context windows. A convolutional autoencoder is trained on **normal clips "
+    "only** (per-mel-band z-score fit on train); a clip's anomaly score is the mean "
+    "reconstruction error over its windows. AUC and partial-AUC (max FPR = 0.1, "
+    "McClish-standardised) are computed with scikit-learn. Higher is better; 0.5 is chance. "
+    "Test sets are balanced (held-out normal count matched to abnormal), per machine id."
+)
+
 
 @dataclass
 class MachineResult:
@@ -213,7 +225,7 @@ def write_results_markdown(results: list[MachineResult], path: str | Path, *, ti
     """Write a per-id AUC/pAUC table plus per-machine-type means to markdown."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# {title}", ""]
+    lines = [f"# {title}", "", _METHOD_NOTE, ""]
     header = (
         "| Machine | id | AUC | pAUC (p=0.1) | Train windows | "
         "Test (norm/abn) | Epochs | Time (s) |"
