@@ -1,0 +1,60 @@
+# Mismaa Phase 2 — acoustic anomaly-detection training configuration.
+#
+# Single source of truth for every non-DSP numeric knob in the acoustic
+# pipeline. The DSP front-end (log-Mel parameters: n_fft, hop, n_mels, mel
+# warping) is owned by configs/dsp.yaml and is *not* duplicated here — this file
+# only configures how those features are windowed, split, and modelled.
+
+data:
+  root: data/mimii           # data/mimii/{pump,fan}/id_XX/{normal,abnormal}/*.wav
+  cache_dir: data/cache      # gitignored feature cache (data/ is ignored wholesale)
+  channel: 0                 # eight-mic MIMII array; DCASE baseline uses a single mic.
+  preprocess: false          # log-Mel directly on the raw mic, matching the DCASE
+                             # baseline. dc-removal etc. live in configs/dsp.yaml.
+
+features:
+  # A "context window" is N consecutive log-Mel frames — the DCASE-2020 Task-2
+  # temporal-context trick. The baseline *flattens* the window into a vector for
+  # a dense AE; we instead keep the (n_mels x context_frames) 2-D patch so the
+  # convolutional AE has spatial structure to exploit (see models/autoencoder.py).
+  context_frames: 5          # frames per window (DCASE baseline value).
+  context_hop: 4             # stride between windows, in frames. DCASE uses 1
+                             # (every frame); 4 keeps a 5-frame context with light
+                             # overlap and ~4x fewer windows so full training of
+                             # all 8 machine ids stays inside the laptop budget.
+  max_train_windows: 150000  # per-machine cap; if exceeded, seeded random subsample.
+                             # Bounds RAM/compute regardless of clip count.
+  standardize: true          # per-mel-band z-score using TRAIN statistics. Log-Mel
+                             # dB bands sit at very different absolute levels; without
+                             # centring, reconstruction MSE is dominated by that offset
+                             # rather than the spectral *shape* that distinguishes an
+                             # anomaly. Stats are fit on normal-only train windows and
+                             # applied unchanged to the test windows (no test leakage).
+
+split:
+  # DCASE 2020 Task 2 convention: train on NORMAL clips only; the test set is a
+  # held-out slice of normal clips plus ALL abnormal clips, evaluated per machine
+  # id. The official dev/eval file lists are not shipped with this raw MIMII copy,
+  # so we hold out a seeded random slice of normals sized to match the abnormal
+  # count (a balanced test, close to the DCASE dev-set balance).
+  seed: 1234
+  test_normal_mode: match_abnormal   # match_abnormal | fraction
+  test_normal_fraction: 0.25         # used only when test_normal_mode == fraction
+
+model:
+  bottleneck: 32             # latent dimension of the convolutional AE.
+  base_channels: 16          # channel width of the first conv block (doubles twice).
+
+train:
+  seed: 1234
+  device: auto               # auto -> mps if available else cpu; or cpu | mps.
+  lr: 0.001
+  batch_size: 512
+  epochs: 20                 # full-run default; the smoke test overrides to 2.
+  weight_decay: 0.0
+  num_workers: 0             # in-memory tensors; a DataLoader worker pool adds no
+                             # value and complicates MPS + fork semantics.
+  val_fraction: 0.05         # slice of training normals held out to watch loss.
+
+eval:
+  pauc_p: 0.1                # partial-AUC false-positive-rate cap (DCASE uses 0.1).
